@@ -18,29 +18,38 @@ MixSampler <- function(zz)
   options(mc.cores = parallel::detectCores())
   d <- 25
   N <- 1000
-  R <- get(load(file="R.RData"))
-  S <- get(load(file="S.RData"))
-  StartPoint <- get(load(file="StartPoint.RData"))
-  init0 <- StartPoint
+  # Files R.RData, S.RData and StartPoint.RData not provided
+  #R <- get(load(file="R.RData"))
+  #S <- get(load(file="S.RData"))
+  #StartPoint <- get(load(file="StartPoint.RData"))
+  #init0 <- StartPoint
+  # Read R and S data from text files instead
+  R <- as.matrix(read.table("R.txt"))
+  S <- as.matrix(read.table("S.txt"))[,1]
+  
   data = list(d=d,N=N,R=R,S=S)
   iter0 <- 25e3
   warmup0 <- 5e3
   fit <- stan("Logit.stan",
               data=data, chains=1, iter=iter0, warmup = warmup0,
-              init = init0,save_dso = TRUE,
+              init="random", # Use random initialisation as init0 not available
+              #init = init0,
+              save_dso = TRUE,
               verbose=FALSE,
               control = list(adapt_engaged=TRUE,stepsize=0.01,
                              metric="unit_e",adapt_delta=0.75),
               algorithm = "NUTS")
   
   sampleNUTS <- as.matrix(fit)
+  # Record initial random chain state for other samplers
+  init0 = sampleNUTS[1, 1:25]
   result <- fit@sim$samples
   L_trace <- attr(result[[1]],"sampler_params")$n_leapfrog__
   stepsize_trace <- attr(result[[1]],"sampler_params")$stepsize__
   accept_trace <- attr(result[[1]],"sampler_params")$accept_stat__
   depth_trace <- attr(result[[1]],"sampler_params")$treedepth__
   epsilon0 <- stepsize_trace[iter0]
-  CompNUTS <- sum((2*L_trace[-c(1:warmup0)]+1))
+  CompNUTS <- sum((L_trace[-c(1:warmup0)]))
   
   val <- sampleNUTS[,Index1]
   val <- val[-1,] - val[-nrow(val),]
@@ -101,7 +110,7 @@ MixSampler <- function(zz)
         Increment <- sum(Delta_x * proposed_v)
         if(is.na(Increment))
         {
-          return(c(current_x, 0, NA, NA, 0))
+          return(c(current_x, 0, 0, ell, ell))
         }
         if(Increment < 0)
         {
@@ -124,7 +133,7 @@ MixSampler <- function(zz)
     rho <- current_U + current_K - candidate_U - candidate_K
     if(is.na(rho))
     {
-      return(c(current_x, 0, NA, NA, 0))
+      return(c(current_x, 0, 0, StopInd, ell))
     }
     else
     {
@@ -161,7 +170,7 @@ MixSampler <- function(zz)
     rho <- exp(current_U-proposed_U+current_K-proposed_K)
     if(is.na(rho))
     {
-      return(c(current_q,0,NA))
+      return(c(current_q,0,0))
     }
     else
     {
@@ -197,17 +206,14 @@ MixSampler <- function(zz)
       L <- quantile(Ind_trace,0.95)
       L_r <- sample(1:L,size=1)
       Xstar <- HMC1(U,grad_U,epsilon,L_r,Xsim[i,])
-      if(!is.na(Xstar[d+2]))
-      {
-        i <- i+1
-        Xsim[i,] <- Xstar[1:d]
-        ratio <- ratio + Xstar[d+1]
-        ratio_theory <- ratio_theory + exp(min(c(0,Xstar[(d+2)])))
-        Ind_trace <- c(Ind_trace, Xstar[d+3])
-        Comp <- Comp + 2*Xstar[(d+4)] + 1
-        Comp_Random <- Comp_Random + 2*L_r+1
-        #print(round(c(i,Xsim[i,1:d],Ind_trace[length(Ind_trace)],length(Ind_trace),L_r),digits=4))
-      }
+      i <- i+1
+      Xsim[i,] <- Xstar[1:d]
+      ratio <- ratio + Xstar[d+1]
+      ratio_theory <- ratio_theory + exp(min(c(0,Xstar[(d+2)])))
+      Ind_trace <- c(Ind_trace, Xstar[d+3])
+      Comp <- Comp + Xstar[(d+4)]
+      Comp_Random <- Comp_Random + L_r
+      #print(round(c(i,Xsim[i,1:d],Ind_trace[length(Ind_trace)],length(Ind_trace),L_r),digits=4))
       if(i %% floor(Niter/10) == 0)
         print(paste("Iteration ",toString(100*round(i/Niter,digits = 2)), "%",sep=""))
     }
@@ -237,14 +243,11 @@ MixSampler <- function(zz)
     {
       r <- sample(1:L,size=1)
       Xstar <- HMC(U,grad_U,epsilon,r,Xsim[i,])
-      if(!is.na(Xstar[d+2]))
-      {
-        i <- i + 1
-        Xsim[i,] <- Xstar[1:d]
-        ratio[i] <- Xstar[d+1]
-        ratio_theory[i] <- Xstar[d+2]
-        Comp <- Comp + r + 2
-      }
+      i <- i + 1
+      Xsim[i,] <- Xstar[1:d]
+      Comp <- Comp + r
+      ratio[i] <- Xstar[d+1]
+      ratio_theory[i] <- Xstar[d+2]
       if(i %% floor(Niter_hmc/10) == 0)
         print(paste("Iteration ",toString(100*round(i/Niter_hmc,digits = 2)), "%",sep=""))
     }
@@ -278,14 +281,11 @@ MixSampler <- function(zz)
       #r <- sample(1:L,size=1)
       r <- sample(Ind_trace,size=1)
       Xstar <- HMC(U,grad_U,epsilon,r,Xsim[i,])
-      if(!is.na(Xstar[d+2]))
-      {
-        i <- i + 1
-        Xsim[i,] <- Xstar[1:d]
-        ratio[i] <- Xstar[d+1]
-        ratio_theory[i] <- Xstar[d+2]
-        Comp <- Comp + r + 2
-      }
+      i <- i + 1
+      Xsim[i,] <- Xstar[1:d]
+      Comp <- Comp + r
+      ratio[i] <- Xstar[d+1]
+      ratio_theory[i] <- Xstar[d+2]
       if(i %% floor(Niter_hmc/10) == 0)
         print(paste("Iteration ",toString(100*round(i/Niter_hmc,digits = 2)), "%",sep=""))
     }
@@ -320,14 +320,11 @@ MixSampler <- function(zz)
       L <- sample(Ind_trace,size=1)
       r <- sample(1:L,size=1)
       Xstar <- HMC(U,grad_U,epsilon,r,Xsim[i,])
-      if(!is.na(Xstar[d+2]))
-      {
-        i <- i + 1
-        Xsim[i,] <- Xstar[1:d]
-        ratio[i] <- Xstar[d+1]
-        ratio_theory[i] <- Xstar[d+2]
-        Comp <- Comp + r + 2
-      }
+      i <- i + 1
+      Xsim[i,] <- Xstar[1:d]
+      Comp <- Comp + r
+      ratio[i] <- Xstar[d+1]
+      ratio_theory[i] <- Xstar[d+2]
       if(i %% floor(Niter_hmc/10) == 0)
         print(paste("Iteration ",toString(100*round(i/Niter_hmc,digits = 2)), "%",sep=""))
     }
@@ -395,10 +392,10 @@ MixSampler <- function(zz)
 
 num_cores <- detectCores()
 
-cl <- makeCluster(num_cores,type = "FORK")
+cl <- makeCluster(num_cores,type = "FORK", outfile = "")
 
 ###################### Repeat 40 times ######################
-Result <- parLapply(cl, 1:40, function(zz) MixSampler(zz))
+Result <- parLapply(cl, 1:4, function(zz) MixSampler(zz))
 
 save(Result, file="Result.RData")
 stopCluster(cl)
